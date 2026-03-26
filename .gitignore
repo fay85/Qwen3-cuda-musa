@@ -1,0 +1,25 @@
+﻿# Model weights (download separately)
+**/models/
+**/qwen3-8b-full/
+
+# Training outputs and checkpoints
+**/output/
+
+# Datasets (download separately)
+**/datasets/
+
+# MUSA core dumps
+**/*.mudmp
+**/mudmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
