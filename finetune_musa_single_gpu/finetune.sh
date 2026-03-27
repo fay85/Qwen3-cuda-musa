@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-#  finetune.sh  —  Qwen3-4B LoRA finetuning on NuminaMath
-#  MUSA (Moore Threads) single-GPU version.
-#  Run on Ubuntu from the script's directory:
-#      cd /path/to/Qwen3/finetune
-#      bash finetune.sh
+#  finetune.sh  -- Qwen3 LoRA finetuning on NuminaMath (MUSA)
+#  Moore Threads single-GPU version. Supports: 4b (default), 8b
+#
+#  Usage:
+#      bash finetune.sh          # Qwen3-4B
+#      bash finetune.sh 8b       # Qwen3-8B
 # ============================================================
 
 set -euo pipefail
@@ -12,15 +13,33 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# ── Configuration ────────────────────────────────────────────
-# Set MODEL_PATH to a local directory if you already have the weights.
-# Set DOWNLOAD_MODEL=true to pull Qwen3-4B from ModelScope first.
-DOWNLOAD_MODEL=true
-MODEL_ID="Qwen/Qwen3-4B"                          # ModelScope model ID (modelscope.cn namespace/name)
-MODEL_PATH="./models/qwen3-4b"                    # local weights path
+# -- Model size selection (4b or 8b) ---------------------------
+MODEL_SIZE="${1:-4b}"
 
+case "$MODEL_SIZE" in
+    4b|4B)
+        MODEL_ID="Qwen/Qwen3-4B"
+        MODEL_PATH="./models/qwen3-4b"
+        OUTPUT_DIR="./output/qwen3-4b-numinamath"
+        LORA_RANK=16
+        LORA_ALPHA=32
+        ;;
+    8b|8B)
+        MODEL_ID="Qwen/Qwen3-8B"
+        MODEL_PATH="./models/qwen3-8b"
+        OUTPUT_DIR="./output/qwen3-8b-numinamath"
+        LORA_RANK=64
+        LORA_ALPHA=128
+        ;;
+    *)
+        echo "ERROR: Unknown model size '$MODEL_SIZE'. Supported: 4b, 8b"
+        exit 1
+        ;;
+esac
+
+# -- Configuration -------------------------------------------
+DOWNLOAD_MODEL=true
 DATASET_DIR="./datasets/numinamath"
-OUTPUT_DIR="./output/qwen3-4b-numinamath"
 
 MAX_LENGTH=2048
 NUM_EPOCHS=3
@@ -28,8 +47,6 @@ BATCH_SIZE=1          # per-device train batch
 EVAL_BATCH_SIZE=1     # per-device eval batch
 GRAD_ACCUM=16         # effective batch = BATCH_SIZE * GRAD_ACCUM * num_gpus
 LEARNING_RATE="1e-4"
-LORA_RANK=16
-LORA_ALPHA=32
 
 # Greedy-decode N samples per epoch for \boxed{} exact-match accuracy.
 # Reduce if accuracy eval is too slow; set to 0 to disable.
@@ -55,7 +72,7 @@ fi
 # ── (Optional) Download model from ModelScope ─────────────────
 if [ "$DOWNLOAD_MODEL" = true ]; then
     echo ""
-    echo "[Step 1/4] Downloading Qwen3-4B from ModelScope ..."
+    echo "[Step 1/4] Downloading $MODEL_ID from ModelScope ..."
     mkdir -p "$MODEL_PATH"
     # Use Python snapshot_download — more reliable than the CLI for model repos
     python - <<EOF
