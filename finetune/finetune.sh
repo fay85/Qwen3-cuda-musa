@@ -25,8 +25,9 @@ case "$MODEL_SIZE" in
         MODEL_ID="Qwen/Qwen3-8B"
         MODEL_PATH="./models/qwen3-8b"
         OUTPUT_DIR="./output/qwen3-8b-numinamath"
-        LORA_RANK=64
-        LORA_ALPHA=128
+        LORA_RANK=32
+        LORA_ALPHA=64
+        MAX_LENGTH=1024
         ;;
     *)
         echo "ERROR: Unknown model size '$MODEL_SIZE'. Supported: 4b, 8b"
@@ -38,7 +39,7 @@ esac
 DOWNLOAD_MODEL=true
 DATASET_DIR="./datasets/numinamath"
 
-MAX_LENGTH=2048
+MAX_LENGTH=${MAX_LENGTH:-2048}
 NUM_EPOCHS=3
 BATCH_SIZE=1          # per-device train batch
 EVAL_BATCH_SIZE=1     # per-device eval batch
