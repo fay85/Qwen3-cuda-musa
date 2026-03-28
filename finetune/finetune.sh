@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 # ============================================================
 #  finetune.sh  -- Qwen3 LoRA finetuning on NuminaMath (CUDA)
-#  Supports: 4b (default), 8b
+#  Supports: 4b (default), 8b, 0.6b
 #
 #  Usage:
 #      bash finetune.sh          # Qwen3-4B
 #      bash finetune.sh 8b       # Qwen3-8B
+#      bash finetune.sh 0.6b     # Qwen3-0.6B
 # ============================================================
 
 set -euo pipefail
 
-# -- Model size selection (4b or 8b) ---------------------------
+# Ubuntu/minimal images often have python3 but no `python` symlink.
+# Override: PYTHON=/path/to/python bash finetune.sh
+if [ -n "${PYTHON:-}" ]; then
+    :
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON=python
+else
+    echo "ERROR: No Python interpreter found (tried python3, python). Install python3 or set PYTHON=/path/to/python"
+    exit 1
+fi
+
+# -- Model size selection (4b, 8b, or 0.6b) --------------------
 MODEL_SIZE="${1:-4b}"
 
 case "$MODEL_SIZE" in
@@ -29,8 +43,15 @@ case "$MODEL_SIZE" in
         LORA_ALPHA=64
         MAX_LENGTH=1024
         ;;
+    0.6b|0.6B)
+        MODEL_ID="Qwen/Qwen3-0.6B"
+        MODEL_PATH="./models/qwen3-0.6b"
+        OUTPUT_DIR="./output/qwen3-0.6b-numinamath"
+        LORA_RANK=16
+        LORA_ALPHA=32
+        ;;
     *)
-        echo "ERROR: Unknown model size '$MODEL_SIZE'. Supported: 4b, 8b"
+        echo "ERROR: Unknown model size '$MODEL_SIZE'. Supported: 4b, 8b, 0.6b"
         exit 1
         ;;
 esac
@@ -71,7 +92,7 @@ if [ "$DOWNLOAD_MODEL" = true ]; then
     echo "[Step 1/4] Downloading $MODEL_ID from ModelScope ..."
     mkdir -p "$MODEL_PATH"
     # Use Python snapshot_download — more reliable than the CLI for model repos
-    python - <<EOF
+    "$PYTHON" - <<EOF
 from modelscope import snapshot_download
 snapshot_download('${MODEL_ID}', local_dir='${MODEL_PATH}')
 EOF
@@ -84,11 +105,11 @@ fi
 # ── Install Python dependencies ───────────────────────────────
 echo ""
 echo "[Step 2/4] Installing Python dependencies ..."
-pip install -r requirements.txt -q
+"$PYTHON" -m pip install -r requirements.txt -q
 
 # ── Build training command ────────────────────────────────────
 TRAIN_CMD=(
-    python train_qwen3.py
+    "$PYTHON" train_qwen3.py
     --model_path                  "$MODEL_PATH"
     --dataset_dir                 "$DATASET_DIR"
     --output_dir                  "$OUTPUT_DIR"
@@ -120,7 +141,7 @@ METRICS_FILE="$OUTPUT_DIR/epoch_metrics.json"
 if [ -f "$METRICS_FILE" ]; then
     echo ""
     echo "[Step 4/4] Plotting loss & accuracy curves ..."
-    python plot_curves.py \
+    "$PYTHON" plot_curves.py \
         --metrics_file "$METRICS_FILE" \
         --output_dir   "$OUTPUT_DIR/plots"
     echo ""
