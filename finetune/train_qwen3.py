@@ -61,6 +61,12 @@ def parse_args():
                    help="Cap training set size (None = full dataset)")
     p.add_argument("--logging_steps", type=int, default=100,
                    help="Log training loss every N optimizer steps (0 = disable step logging)")
+    p.add_argument(
+        "--map_num_proc",
+        type=int,
+        default=1,
+        help="datasets.map() worker processes for tokenisation. Use 1 to limit host RAM (large parquet + many workers can OOM the machine).",
+    )
     return p.parse_args()
 
 
@@ -328,9 +334,31 @@ class EpochMetricsCallback(TrainerCallback):
 # Main
 # ---------------------------------------------------------------------------
 
+def _cuda_bf16_supported() -> bool:
+    """Ampere+ generally supports BF16; V100 / Pascal do not — use FP16 there."""
+    if not torch.cuda.is_available():
+        return False
+    fn = getattr(torch.cuda, "is_bf16_supported", None)
+    if fn is None:
+        return False
+    try:
+        return bool(fn())
+    except Exception:
+        return False
+
+
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
+
+    use_cuda = torch.cuda.is_available()
+    use_bf16 = use_cuda and _cuda_bf16_supported()
+    use_fp16 = use_cuda and not use_bf16
+    model_dtype = torch.bfloat16 if use_bf16 else (torch.float16 if use_cuda else torch.float32)
+    print(
+        f"Mixed precision: bf16_training={use_bf16}, fp16_training={use_fp16}, "
+        f"model_dtype={model_dtype} (V100 and older GPUs should use fp16, not bf16)"
+    )
 
     # ── Tokenizer ──────────────────────────────────────────────────────────
     print(f"Loading tokenizer: {args.model_path}")
@@ -342,7 +370,7 @@ def main():
     print(f"Loading model: {args.model_path}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=model_dtype,
         trust_remote_code=True,
     )
     model.config.use_cache = False   # required when using gradient checkpointing
@@ -358,6 +386,8 @@ def main():
         bias="none",
     )
     model = get_peft_model(model, lora_cfg)
+    # PEFT + gradient checkpointing: ensure non-LoRA inputs get grads
+    model.enable_input_require_grads()
     model.print_trainable_parameters()
 
     # ── Dataset ────────────────────────────────────────────────────────────
@@ -371,13 +401,18 @@ def main():
     def preprocess(ex):
         return tokenize_example(ex, tokenizer, args.max_length)
 
+    _mp = max(1, args.map_num_proc)
     print("Tokenising train split ...")
-    train_ds = train_raw.map(preprocess, remove_columns=train_raw.column_names, num_proc=4, desc="train")
+    train_ds = train_raw.map(
+        preprocess, remove_columns=train_raw.column_names, num_proc=_mp, desc="train"
+    )
     train_ds = train_ds.filter(lambda x: x["valid"] and len(x["input_ids"]) > 10)
     train_ds = train_ds.remove_columns(["valid"])
 
     print("Tokenising eval split ...")
-    eval_ds = eval_raw.map(preprocess, remove_columns=eval_raw.column_names, num_proc=4, desc="eval")
+    eval_ds = eval_raw.map(
+        preprocess, remove_columns=eval_raw.column_names, num_proc=_mp, desc="eval"
+    )
     eval_ds = eval_ds.filter(lambda x: x["valid"] and len(x["input_ids"]) > 10)
     eval_ds = eval_ds.remove_columns(["valid"])
 
@@ -415,7 +450,8 @@ def main():
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
         warmup_ratio=0.05,
-        bf16=True,
+        bf16=use_bf16,
+        fp16=use_fp16,
         logging_strategy="steps",
         logging_steps=_log_steps,
         logging_first_step=True,
